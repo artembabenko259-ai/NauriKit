@@ -11,6 +11,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     linkModule(naurikit_mod, target);
+    b.addModule("naurikit", naurikit_mod);
 
     // ─── Static library ──────────────────────────────────────────────────────
     const lib = b.addLibrary(.{
