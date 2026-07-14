@@ -90,8 +90,15 @@ fn windowStartDragHandler(ctx: *nk.IpcContext, _: std.json.Value) void {
     ctx.resolveValue(true);
 }
 
-fn appQuitHandler(ctx: *nk.IpcContext, _: std.json.Value) void {
-    ctx.webview.window.app.quit();
+fn appQuitHandler(ctx: *nk.IpcContext, payload: std.json.Value) void {
+    var code: i32 = 0;
+    if (payload == .object and payload.object.contains("code")) {
+        const code_val = payload.object.get("code").?;
+        if (code_val == .integer) {
+            code = @intCast(code_val.integer);
+        }
+    }
+    ctx.webview.window.app.quit(code);
     ctx.resolveValue(true);
 }
 
