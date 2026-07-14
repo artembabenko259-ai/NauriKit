@@ -41,6 +41,27 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run-hello", "Run the hello example");
     run_step.dependOn(&run_hello.step);
 
+    // ─── Example: live2d ────────────────────────────────────────────────────────
+    const live2d_mod = b.createModule(.{
+        .root_source_file = b.path("examples/live2d/src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "naurikit", .module = naurikit_mod },
+        },
+    });
+    linkModule(live2d_mod, target);
+
+    const live2d_exe = b.addExecutable(.{
+        .name = "live2d",
+        .root_module = live2d_mod,
+    });
+    b.installArtifact(live2d_exe);
+
+    const run_live2d = b.addRunArtifact(live2d_exe);
+    const run_live2d_step = b.step("run-live2d", "Run the live2d transparent widget example");
+    run_live2d_step.dependOn(&run_live2d.step);
+
     // ─── Example: react-app ──────────────────────────────────────────────────
     const react_mod = b.createModule(.{
         .root_source_file = b.path("examples/react-app/src-nauri/main.zig"),

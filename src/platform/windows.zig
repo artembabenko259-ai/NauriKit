@@ -133,6 +133,9 @@ const SW_MINIMIZE: i32 = 6;
 const SW_RESTORE: i32 = 9;
 const SW_SHOWNORMAL: i32 = 1;
 
+const LWA_ALPHA: u32 = 0x00000002;
+const LWA_COLORKEY: u32 = 0x00000001;
+
 const CW_USEDEFAULT: i32 = @bitCast(@as(u32, 0x80000000));
 const HWND_TOPMOST: HWND = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
 const HWND_NOTOPMOST: HWND = @ptrFromInt(@as(usize, @bitCast(@as(isize, -2))));
@@ -266,6 +269,7 @@ extern "user32" fn DefWindowProcW(
 extern "user32" fn ShowWindow(hWnd: HWND, nCmdShow: i32) callconv(.winapi) BOOL;
 extern "user32" fn UpdateWindow(hWnd: HWND) callconv(.winapi) BOOL;
 pub extern "user32" fn DestroyWindow(hWnd: HWND) callconv(.winapi) BOOL;
+pub extern "user32" fn SetLayeredWindowAttributes(hwnd: HWND, crKey: u32, bAlpha: u8, dwFlags: u32) callconv(.winapi) BOOL;
 pub extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
 pub extern "user32" fn SendMessageA(hWnd: HWND, Msg: u32, wParam: usize, lParam: isize) callconv(.winapi) LRESULT;
 extern "user32" fn SetWindowTextW(hWnd: HWND, lpString: [*:0]const u16) callconv(.winapi) BOOL;
@@ -392,7 +396,7 @@ fn ensureClassRegistered(hInstance: HINSTANCE) !void {
         .hInstance = hInstance,
         .hIcon = LoadIconW(null, @ptrFromInt(32512)),
         .hCursor = LoadCursorW(null, @ptrFromInt(32512)),
-        .hbrBackground = @ptrFromInt(COLOR_WINDOW + 1),
+        .hbrBackground = null, // No default background to prevent white flashes
         .lpszMenuName = null,
         .lpszClassName = WINDOW_CLASS_NAME,
         .hIconSm = LoadIconW(null, @ptrFromInt(32512)),
@@ -414,8 +418,13 @@ pub fn createWindow(app: *@import("../app.zig").App, config: @import("../window.
     const hInstance = GetModuleHandleW(null) orelse return error.NoModuleHandle;
     try ensureClassRegistered(hInstance);
 
+    const ex_style: u32 = if (config.transparent)
+        0x00080000 // WS_EX_LAYERED
+    else
+        0;
+
     const hwnd = CreateWindowExW(
-        0,
+        ex_style,
         WINDOW_CLASS_NAME,
         title_w.ptr,
         style | WS_VISIBLE,
@@ -609,6 +618,9 @@ fn windowProc(
             _ = ReleaseCapture();
             _ = SendMessageA(hwnd, 0x00A1, 2, 0); // WM_NCLBUTTONDOWN, HTCAPTION
             return 0;
+        },
+        0x0014 => { // WM_ERASEBKGND
+            return 1; // handled, don't paint white
         },
         WM_APP_START_RESIZE => {
             _ = ReleaseCapture();

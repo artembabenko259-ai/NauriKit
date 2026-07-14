@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Live2D Widget</title>
+  <style>
+    /* Reset and transparent background */
+    body, html {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background-color: transparent !important;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    #app {
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Invisible drag region covering the whole app */
+    .drag-region {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      z-index: 10;
+      /* Can't use pointer-events: none because we need to drag it! */
+      cursor: grab;
+    }
+    
+    .drag-region:active {
+      cursor: grabbing;
+    }
+
+    /* We put the canvas *behind* the drag region */
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 5;
+    }
+
+    /* Close button */
+    .btn-close {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      width: 32px;
+      height: 32px;
+      background: rgba(255, 0, 0, 0.7);
+      color: white;
+      border: none;
+      border-radius: 50%;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      z-index: 20;
+      display: none;
+      transition: opacity 0.2s;
+    }
+
+    .btn-close:hover {
+      background: rgba(255, 0, 0, 1);
+    }
+
+    /* Show close button on hover */
+    #app:hover .btn-close {
+      display: block;
+    }
+
+  </style>
+  
+  <!-- NauriKit Core -->
+  <script>
+    window.naurikit = {
+      invoke: (cmd, payload = {}) => {
+        return new Promise((resolve, reject) => {
+          const id = Math.random().toString(36).slice(2);
+          window._nk_promises = window._nk_promises || {};
+          window._nk_promises[id] = { resolve, reject };
+          window.chrome.webview.postMessage(JSON.stringify({
+            id: id,
+            cmd: cmd,
+            payload: payload
+          }));
+        });
+      }
+    };
+    
+    if (window.chrome && window.chrome.webview) {
+      window.chrome.webview.addEventListener('message', (e) => {
+        const msg = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+        if (msg.id && window._nk_promises[msg.id]) {
+          if (msg.error) {
+            window._nk_promises[msg.id].reject(msg.error);
+          } else {
+            window._nk_promises[msg.id].resolve(msg.result);
+          }
+          delete window._nk_promises[msg.id];
+        }
+      });
+    }
+  </script>
+
+  <!-- PixiJS + Live2D Runtimes -->
+  <script src="https://cdn.jsdelivr.net/gh/dylanNew/live2d/webgl/Live2D/lib/live2d.min.js"></script>
+  <script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.2/dist/browser/pixi.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display/dist/index.min.js"></script>
+</head>
+<body>
+
+<div id="app">
+  <div class="drag-region" id="drag-handle"></div>
+  <button class="btn-close" id="btn-close">×</button>
+  <canvas id="canvas"></canvas>
+</div>
+
+<script>
+  // -- Setup NauriKit dragging and closing --
+  const dragHandle = document.getElementById('drag-handle');
+  dragHandle.addEventListener('mousedown', (e) => {
+    if (e.button === 0) {
+      naurikit.invoke('window_start_drag');
+    }
+  });
+
+  const btnClose = document.getElementById('btn-close');
+  btnClose.addEventListener('mousedown', (e) => e.stopPropagation()); // prevent drag
+  btnClose.addEventListener('click', () => {
+    naurikit.invoke('quit_widget'); // defined in main.zig
+  });
+
+  // -- Setup PixiJS + Live2D --
+  (async function main() {
+    const app = new PIXI.Application({
+      view: document.getElementById('canvas'),
+      autoStart: true,
+      backgroundAlpha: 0, // CRITICAL: makes WebGL canvas transparent!
+      premultipliedAlpha: true, // often needed for correct blending
+      resizeTo: window,
+      resolution: window.devicePixelRatio || 1
+    });
+
+    const models = PIXI.live2d.Live2DModel;
+    
+    // Download Haru model (Cubism 4)
+    const modelUrl = 'https://cdn.jsdelivr.net/gh/guansss/pixi-live2d-display/test/assets/haru/haru_greeter_t03.model3.json';
+    
+    try {
+      const model = await models.from(modelUrl);
+      
+      // Auto-scale to fit window
+      const scaleX = window.innerWidth / model.internalModel.width;
+      const scaleY = window.innerHeight / model.internalModel.height;
+      model.scale.set(Math.min(scaleX, scaleY) * 0.9);
+      
+      // model.width/height already includes scale in PixiJS!
+      // Center horizontally and vertically
+      model.x = (window.innerWidth - model.width) / 2;
+      model.y = (window.innerHeight - model.height) / 2;
+
+      app.stage.addChild(model);
+
+      // Add interactivity - model looks at cursor
+      dragHandle.addEventListener('mousemove', (e) => {
+        model.focus(e.clientX, e.clientY);
+      });
+      
+      // Add clicking interaction
+      dragHandle.addEventListener('click', (e) => {
+        model.tap(e.clientX, e.clientY);
+      });
+
+    } catch (err) {
+      console.error("Failed to load model:", err);
+    }
+    
+    // Resize handler
+    window.addEventListener('resize', () => {
+       if (app.stage.children.length > 0) {
+         const model = app.stage.children[0];
+         model.x = window.innerWidth / 2 - (model.width * model.scale.x) / 2;
+         model.y = window.innerHeight - (model.height * model.scale.y);
+       }
+    });
+
+  })();
+</script>
+</body>
+</html>
