@@ -14,6 +14,7 @@ pub fn registerCoreHandlers(wv: *nk.WebView) !void {
     try wv.onCommand("window_set_title", nk.IpcCommand.make(windowSetTitleHandler), null);
     try wv.onCommand("window_start_drag", nk.IpcCommand.make(windowStartDragHandler), null);
     try wv.onCommand("dialog_message", nk.IpcCommand.make(dialogMessageHandler), null);
+    try wv.onCommand("app_quit", nk.IpcCommand.make(appQuitHandler), null);
 }
 
 fn fsReadHandler(ctx: *nk.IpcContext, payload: std.json.Value) void {
@@ -86,6 +87,11 @@ fn windowSetTitleHandler(ctx: *nk.IpcContext, payload: std.json.Value) void {
 
 fn windowStartDragHandler(ctx: *nk.IpcContext, _: std.json.Value) void {
     ctx.webview.window.startDrag();
+    ctx.resolveValue(true);
+}
+
+fn appQuitHandler(ctx: *nk.IpcContext, _: std.json.Value) void {
+    ctx.webview.window.app.quit();
     ctx.resolveValue(true);
 }
 
