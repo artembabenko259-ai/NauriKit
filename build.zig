@@ -5,13 +5,12 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // ─── NauriKit module ─────────────────────────────────────────────────────
-    const naurikit_mod = b.createModule(.{
+    const naurikit_mod = b.addModule("naurikit", .{
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
     });
     linkModule(naurikit_mod, target);
-    b.addModule("naurikit", naurikit_mod);
 
     // ─── Static library ──────────────────────────────────────────────────────
     const lib = b.addLibrary(.{
