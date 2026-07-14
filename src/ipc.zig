@@ -75,19 +75,23 @@ pub const Ipc = struct {
         });
     }
 
-    pub fn dispatch(
-        self: *Self,
+    const DispatchArgs = struct {
+        ipc: *Ipc,
         webview: *@import("webview.zig").WebView,
         raw: []const u8,
-    ) void {
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
+    };
+
+    fn dispatchWorker(args: DispatchArgs) void {
+        var arena = std.heap.ArenaAllocator.init(args.ipc.allocator);
         defer arena.deinit();
         const alloc = arena.allocator();
+
+        defer args.ipc.allocator.free(args.raw); // Free the raw string allocated in dispatch()
 
         const parsed = std.json.parseFromSlice(
             std.json.Value,
             alloc,
-            raw,
+            args.raw,
             .{},
         ) catch |err| {
             std.log.err("IPC: failed to parse JSON: {}", .{err});
@@ -99,7 +103,6 @@ pub const Ipc = struct {
         if (root != .object) return;
 
         const obj = root.object;
-
         const id_val = obj.get("id") orelse return;
         const cmd_val = obj.get("cmd") orelse return;
         const payload_val = obj.get("payload") orelse std.json.Value{ .null = {} };
@@ -109,11 +112,11 @@ pub const Ipc = struct {
         const id = id_val.string;
         const cmd = cmd_val.string;
 
-        for (self.commands.items) |entry| {
+        for (args.ipc.commands.items) |entry| {
             if (std.mem.eql(u8, entry.name, cmd)) {
                 var ctx = IpcContext{
                     .id = id,
-                    .webview = webview,
+                    .webview = args.webview,
                     .user_data = entry.user_data,
                     ._allocator = alloc,
                     ._response_buf = undefined,
@@ -126,7 +129,28 @@ pub const Ipc = struct {
         }
 
         std.log.warn("IPC: unknown command '{s}'", .{cmd});
-        sendReject(webview, id, "unknown command") catch {};
+        sendReject(args.webview, id, "unknown command") catch {};
+    }
+
+    pub fn dispatch(
+        self: *Self,
+        webview: *@import("webview.zig").WebView,
+        raw: []const u8,
+    ) void {
+        const raw_copy = self.allocator.dupe(u8, raw) catch return;
+        
+        const args = DispatchArgs{
+            .ipc = self,
+            .webview = webview,
+            .raw = raw_copy,
+        };
+        
+        const th = std.Thread.spawn(.{}, dispatchWorker, .{args}) catch |err| {
+            std.log.err("IPC: failed to spawn thread: {}", .{err});
+            self.allocator.free(raw_copy);
+            return;
+        };
+        th.detach();
     }
 };
 
@@ -142,6 +166,8 @@ fn ipcReject(ctx: *IpcContext, err_msg: []const u8) void {
     };
 }
 
+const platform = @import("platform/windows.zig");
+
 fn sendResolve(webview: *@import("webview.zig").WebView, id: []const u8, result: []const u8) !void {
     var buf: [65536]u8 = undefined;
     const script = try std.fmt.bufPrint(
@@ -149,7 +175,7 @@ fn sendResolve(webview: *@import("webview.zig").WebView, id: []const u8, result:
         "window.__naurikit.__resolve('{s}', {s})",
         .{ id, result },
     );
-    try webview.eval(script);
+    platform.postIpcResponse(webview.window.handle, script);
 }
 
 fn sendReject(webview: *@import("webview.zig").WebView, id: []const u8, msg: []const u8) !void {
@@ -159,7 +185,7 @@ fn sendReject(webview: *@import("webview.zig").WebView, id: []const u8, msg: []c
         "window.__naurikit.__reject('{s}', '{s}')",
         .{ id, msg },
     );
-    try webview.eval(script);
+    platform.postIpcResponse(webview.window.handle, script);
 }
 
 const JsonStringFormatter = struct {
@@ -194,6 +220,23 @@ pub const IpcCommand = struct {
         return struct {
             fn h(ctx: *IpcContext, payload: std.json.Value) void {
                 handler(ctx, payload);
+            }
+        }.h;
+    }
+
+    pub fn makeTyped(comptime ArgsType: type, comptime handler: anytype) CommandHandler {
+        return struct {
+            fn h(ctx: *IpcContext, payload: std.json.Value) void {
+                if (ArgsType == void) {
+                    handler(ctx, {});
+                    return;
+                }
+                const parsed = std.json.parseFromValue(ArgsType, ctx._allocator, payload, .{ .ignore_unknown_fields = true }) catch |err| {
+                    ctx.rejectError("invalid arguments: {s}", .{@errorName(err)});
+                    return;
+                };
+                defer parsed.deinit();
+                handler(ctx, parsed.value);
             }
         }.h;
     }

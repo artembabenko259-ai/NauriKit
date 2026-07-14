@@ -10,6 +10,8 @@ const platform = @import("lib.zig").platform;
 
 pub const WindowTheme = enum { system, light, dark };
 
+pub const WindowBackdrop = enum { none, mica, acrylic };
+
 pub const WindowOptions = struct {
     title: []const u8 = "NauriKit App",
     width: u32 = 800,
@@ -20,6 +22,7 @@ pub const WindowOptions = struct {
     resizable: bool = true,
     decorations: bool = true,
     transparent: bool = false,
+    backdrop: WindowBackdrop = .none,
     always_on_top: bool = false,
     center: bool = true,
     theme: WindowTheme = .system,
@@ -105,8 +108,16 @@ pub const Window = struct {
         platform.windowRestore(self.handle);
     }
 
+    pub fn close(self: *Self) void {
+        platform.windowClose(self.handle);
+    }
+
     pub fn startDrag(self: *Self) void {
         platform.windowStartDrag(self.handle);
+    }
+
+    pub fn startResize(self: *Self, edge: u32) void {
+        platform.windowStartResize(self.handle, edge);
     }
 
     // ─── WebView ──────────────────────────────────────────────────────────────

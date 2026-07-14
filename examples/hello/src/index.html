@@ -8,10 +8,11 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
   <style>
     :root {
-      --bg: #0d0d1a;
-      --surface: #13132a;
-      --surface2: #1a1a35;
-      --border: rgba(120, 100, 255, 0.15);
+      /* Use semi-transparent colors so Mica backdrop shines through */
+      --bg: rgba(13, 13, 26, 0.6);
+      --surface: rgba(19, 19, 42, 0.5);
+      --surface2: rgba(26, 26, 53, 0.7);
+      --border: rgba(120, 100, 255, 0.2);
       --accent: #7c3aed;
       --accent2: #06b6d4;
       --accent3: #10b981;
@@ -41,7 +42,8 @@
       align-items: center;
       justify-content: space-between;
       padding: 0 12px;
-      -webkit-app-region: drag;
+      /* Default cursor for native desktop feel */
+      cursor: default;
       flex-shrink: 0;
     }
 
@@ -59,18 +61,34 @@
 
     .titlebar-controls {
       display: flex;
-      gap: 6px;
-      -webkit-app-region: no-drag;
+      height: 100%;
+      align-items: center;
+      gap: 2px;
+    }
+
+    .titlebar-btn-wrapper {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 100%;
+      cursor: pointer;
+    }
+    
+    .titlebar-btn-wrapper:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+    
+    .titlebar-btn-wrapper.close:hover {
+      background: #e81123;
     }
 
     .titlebar-btn {
       width: 12px; height: 12px;
       border-radius: 50%;
       border: none;
-      cursor: pointer;
-      transition: opacity 0.2s;
+      pointer-events: none; /* Let wrapper handle clicks */
     }
-    .titlebar-btn:hover { opacity: 0.7; }
     .titlebar-btn.close  { background: #ff5f56; }
     .titlebar-btn.min    { background: #ffbd2e; }
     .titlebar-btn.max    { background: #27c93f; }
@@ -296,6 +314,12 @@
     .btn-primary:hover { background: #6d28d9; transform: translateY(-1px); }
     .btn-primary:active { transform: translateY(0); }
 
+    .btn-secondary {
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
     .btn-outline {
       background: transparent;
       color: var(--text-muted);
@@ -393,6 +417,20 @@
       font-weight: 600;
     }
 
+    /* ── Resize borders ────────────────────────────────────────────────── */
+    .resize-edge {
+      position: fixed;
+      z-index: 9999;
+    }
+    .resize-edge.top { top: 0; left: 8px; right: 8px; height: 6px; cursor: n-resize; }
+    .resize-edge.bottom { bottom: 0; left: 8px; right: 8px; height: 6px; cursor: s-resize; }
+    .resize-edge.left { top: 8px; bottom: 8px; left: 0; width: 6px; cursor: w-resize; }
+    .resize-edge.right { top: 8px; bottom: 8px; right: 0; width: 6px; cursor: e-resize; }
+    .resize-edge.top-left { top: 0; left: 0; width: 8px; height: 8px; cursor: nw-resize; }
+    .resize-edge.top-right { top: 0; right: 0; width: 8px; height: 8px; cursor: ne-resize; }
+    .resize-edge.bottom-left { bottom: 0; left: 0; width: 8px; height: 8px; cursor: sw-resize; }
+    .resize-edge.bottom-right { bottom: 0; right: 0; width: 8px; height: 8px; cursor: se-resize; }
+
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
@@ -400,8 +438,18 @@
 </head>
 <body>
 
+<!-- ── Resize Borders ───────────────────────────────────────────────────── -->
+<div class="resize-edge top" onmousedown="naurikit.invoke('window_start_resize', {edge: 12})"></div>
+<div class="resize-edge bottom" onmousedown="naurikit.invoke('window_start_resize', {edge: 15})"></div>
+<div class="resize-edge left" onmousedown="naurikit.invoke('window_start_resize', {edge: 10})"></div>
+<div class="resize-edge right" onmousedown="naurikit.invoke('window_start_resize', {edge: 11})"></div>
+<div class="resize-edge top-left" onmousedown="naurikit.invoke('window_start_resize', {edge: 13})"></div>
+<div class="resize-edge top-right" onmousedown="naurikit.invoke('window_start_resize', {edge: 14})"></div>
+<div class="resize-edge bottom-left" onmousedown="naurikit.invoke('window_start_resize', {edge: 16})"></div>
+<div class="resize-edge bottom-right" onmousedown="naurikit.invoke('window_start_resize', {edge: 17})"></div>
+
 <!-- ── Titlebar ─────────────────────────────────────────────────────────── -->
-<div class="titlebar">
+<div class="titlebar" onmousedown="if(!event.target.closest('.titlebar-controls')) naurikit.invoke('window_start_drag')">
   <div class="titlebar-logo">
     <svg viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2">
       <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5"/>
@@ -409,12 +457,18 @@
       <line x1="2" y1="8.5" x2="22" y2="8.5"/>
       <line x1="2" y1="15.5" x2="22" y2="15.5"/>
     </svg>
-    NAURIKIT
+    NAURIKIT MICA SHOWCASE
   </div>
   <div class="titlebar-controls">
-    <button class="titlebar-btn min"   onclick="naurikit.minimize()"  title="Minimize"></button>
-    <button class="titlebar-btn max"   onclick="naurikit.maximize()"  title="Maximize"></button>
-    <button class="titlebar-btn close" onclick="naurikit.quit()"      title="Close"></button>
+    <div class="titlebar-btn-wrapper" onclick="naurikit.invoke('window_minimize')" title="Minimize">
+      <div class="titlebar-btn min"></div>
+    </div>
+    <div class="titlebar-btn-wrapper" onclick="naurikit.invoke('window_maximize')" title="Maximize">
+      <div class="titlebar-btn max"></div>
+    </div>
+    <div class="titlebar-btn-wrapper close" onclick="naurikit.invoke('app_quit')" title="Close">
+      <div class="titlebar-btn close"></div>
+    </div>
   </div>
 </div>
 
@@ -469,10 +523,11 @@
       </div>
 
       <div class="demo-section">
-        <h2>IPC Demo <span class="tag">JS → Zig → JS</span></h2>
+        <h2>IPC & Scopes Demo <span class="tag">Type-Safe & Secure</span></h2>
         <div class="input-row">
           <input type="text" id="name-input" placeholder="Enter your name..." value="World" />
           <button class="btn btn-primary" onclick="runGreet()" id="greet-btn">Greet 👋</button>
+          <button class="btn btn-outline" onclick="testScope()">Test FS Scope 🔒</button>
           <button class="btn btn-outline" onclick="clearLog()">Clear</button>
         </div>
         <div class="output" id="output"><span class="log-line info">// Output will appear here...</span></div>
@@ -499,6 +554,21 @@
     <div id="tab-about" style="display:none">
       <div class="demo-section">
         <h2>About NauriKit</h2>
+        <div class="test-card" style="margin-bottom: 1rem;">
+          <h3>⚡ Async IPC</h3>
+          <p>This runs a heavy 3-second task on a background thread.</p>
+          <button id="btn-slow" class="btn btn-primary">Run Heavy Task</button>
+        </div>
+
+        <div class="test-card" style="margin-bottom: 1rem;">
+          <h3>🖼️ Native OS Dialogs</h3>
+          <p>Open/Save file dialogs directly from Windows Explorer.</p>
+          <div style="display:flex;gap:0.5rem;margin-top:1rem;">
+            <button id="btn-dialog-open" class="btn btn-primary">Open File</button>
+            <button id="btn-dialog-save" class="btn btn-secondary">Save File</button>
+          </div>
+        </div>
+        
         <div class="info-grid">
           <div class="info-item">
             <div class="key">Framework</div>
@@ -578,10 +648,20 @@ Key advantages:
       const result = await naurikit.invoke('greet', { name });
       log(`✅ ${result}`, '');
     } catch (e) {
-      log(`❌ Error: ${e.message}`, 'error');
+      log(`❌ Error: ${e}`, 'error');
     } finally {
       btn.disabled = false;
       btn.textContent = 'Greet 👋';
+    }
+  }
+
+  async function testScope() {
+    log('Attempting to read C:\\Windows\\System32\\drivers\\etc\\hosts...');
+    try {
+      await naurikit.invoke('fs_read', { path: 'C:\\Windows\\System32\\drivers\\etc\\hosts' });
+      log('❌ Oh no! File read was successful (Scope failed!)', 'error');
+    } catch (e) {
+      log(`✅ SUCCESS! Request blocked by Zig Security Scope: ${e}`, 'info');
     }
   }
 
@@ -617,7 +697,58 @@ Key advantages:
     if (e.key === 'F12') naurikit.openDevTools();
   });
 
-  console.log('[NauriKit] Hello UI loaded ✓');
+  // ── Async IPC ──────────────────────────────────────────────────────────
+  document.getElementById('btn-slow').addEventListener('click', async () => {
+    const btn = document.getElementById('btn-slow');
+    btn.innerText = "Running (Try dragging window)...";
+    try {
+      const res = await naurikit.invoke('slow_task');
+      alert("Result: " + res);
+    } catch (err) {
+      alert("Error: " + err);
+    } finally {
+      btn.innerText = "Run Heavy Task";
+    }
+  });
+
+  // ── Native Dialogs ────────────────────────────────────────────────────────
+  document.getElementById('btn-dialog-open').addEventListener('click', async () => {
+    try {
+      const path = await naurikit.invoke('dialog_open_file', {
+        title: "Select a cool file",
+        filters: [
+          { name: "Images", pattern: "*.png;*.jpg;*.jpeg" },
+          { name: "Text Files", pattern: "*.txt;*.md" },
+          { name: "All Files", pattern: "*.*" }
+        ]
+      });
+      if (path) {
+        alert("You selected: " + path);
+      } else {
+        console.log("Open dialog cancelled");
+      }
+    } catch (err) {
+      alert("Error: " + err);
+    }
+  });
+
+  document.getElementById('btn-dialog-save').addEventListener('click', async () => {
+    try {
+      const path = await naurikit.invoke('dialog_save_file', {
+        title: "Save your masterpiece",
+        filters: [{ name: "Text Document", pattern: "*.txt" }]
+      });
+      if (path) {
+        alert("You want to save to: " + path);
+      } else {
+        console.log("Save dialog cancelled");
+      }
+    } catch (err) {
+      alert("Error: " + err);
+    }
+  });
+
+  console.log('[NauriKit] Hello UI loaded ✨');
 </script>
 </body>
 </html>

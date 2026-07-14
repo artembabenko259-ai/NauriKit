@@ -7,63 +7,55 @@ const c = @cImport({
 extern "user32" fn MessageBoxA(hWnd: ?*anyopaque, lpText: [*:0]const u8, lpCaption: [*:0]const u8, uType: u32) callconv(.winapi) i32;
 
 pub fn registerCoreHandlers(wv: *nk.WebView) !void {
-    try wv.onCommand("fs_read", nk.IpcCommand.make(fsReadHandler), null);
-    try wv.onCommand("fs_write", nk.IpcCommand.make(fsWriteHandler), null);
+    try wv.onCommand("fs_read", nk.IpcCommand.makeTyped(FsReadArgs, fsReadHandler), null);
+    try wv.onCommand("fs_write", nk.IpcCommand.makeTyped(FsWriteArgs, fsWriteHandler), null);
     try wv.onCommand("window_minimize", nk.IpcCommand.make(windowMinimizeHandler), null);
     try wv.onCommand("window_maximize", nk.IpcCommand.make(windowMaximizeHandler), null);
     try wv.onCommand("window_set_title", nk.IpcCommand.make(windowSetTitleHandler), null);
     try wv.onCommand("window_start_drag", nk.IpcCommand.make(windowStartDragHandler), null);
+    try wv.onCommand("window_start_resize", nk.IpcCommand.makeTyped(WindowStartResizeArgs, windowStartResizeHandler), null);
     try wv.onCommand("dialog_message", nk.IpcCommand.make(dialogMessageHandler), null);
+    try wv.onCommand("dialog_open_file", nk.IpcCommand.makeTyped(DialogOpenFileArgs, dialogOpenFileHandler), null);
+    try wv.onCommand("dialog_save_file", nk.IpcCommand.makeTyped(DialogSaveFileArgs, dialogSaveFileHandler), null);
     try wv.onCommand("app_quit", nk.IpcCommand.make(appQuitHandler), null);
 }
 
-fn fsReadHandler(ctx: *nk.IpcContext, payload: std.json.Value) void {
-    if (payload != .object or !payload.object.contains("path")) {
-        ctx.rejectError("{s}", .{"Missing 'path' argument"});
+const FsReadArgs = struct {
+    path: []const u8,
+};
+
+fn fsReadHandler(ctx: *nk.IpcContext, args: FsReadArgs) void {
+    const scope = ctx.webview.window.app.config.fs_scope;
+    const allowed = nk.Fs.checkScope(ctx._allocator, scope, args.path) catch false;
+    if (!allowed) {
+        ctx.rejectError("Access denied by scope: {s}", .{args.path});
         return;
     }
-    const path = payload.object.get("path").?.string;
-    
-    const path_z = ctx.webview.window.app.allocator.dupeZ(u8, path) catch return;
-    defer ctx.webview.window.app.allocator.free(path_z);
-    
-    const file = c.fopen(path_z.ptr, "rb") orelse {
-        ctx.rejectError("{s}", .{"Cannot open file"});
+
+    const data = nk.Fs.readFile(ctx._allocator, args.path) catch |err| {
+        ctx.rejectError("read error: {s}", .{@errorName(err)});
         return;
     };
-    defer _ = c.fclose(file);
-    
-    _ = c.fseek(file, 0, c.SEEK_END);
-    const size = c.ftell(file);
-    _ = c.fseek(file, 0, c.SEEK_SET);
-    
-    const content = ctx.webview.window.app.allocator.alloc(u8, @intCast(size)) catch return;
-    defer ctx.webview.window.app.allocator.free(content);
-    
-    _ = c.fread(content.ptr, 1, @intCast(size), file);
-    
-    ctx.resolveValue(content);
+    ctx.resolveValue(data);
 }
 
-fn fsWriteHandler(ctx: *nk.IpcContext, payload: std.json.Value) void {
-    if (payload != .object or !payload.object.contains("path") or !payload.object.contains("contents")) {
-        ctx.rejectError("{s}", .{"Missing 'path' or 'contents'"});
+const FsWriteArgs = struct {
+    path: []const u8,
+    contents: []const u8,
+};
+
+fn fsWriteHandler(ctx: *nk.IpcContext, args: FsWriteArgs) void {
+    const scope = ctx.webview.window.app.config.fs_scope;
+    const allowed = nk.Fs.checkScope(ctx._allocator, scope, args.path) catch false;
+    if (!allowed) {
+        ctx.rejectError("Access denied by scope: {s}", .{args.path});
         return;
     }
-    const path = payload.object.get("path").?.string;
-    const contents = payload.object.get("contents").?.string;
-    
-    const path_z = ctx.webview.window.app.allocator.dupeZ(u8, path) catch return;
-    defer ctx.webview.window.app.allocator.free(path_z);
 
-    const file = c.fopen(path_z.ptr, "wb") orelse {
-        ctx.rejectError("{s}", .{"Cannot create file"});
+    nk.Fs.writeFile(args.path, args.contents) catch |err| {
+        ctx.rejectError("write error: {s}", .{@errorName(err)});
         return;
     };
-    defer _ = c.fclose(file);
-    
-    _ = c.fwrite(contents.ptr, 1, contents.len, file);
-    
     ctx.resolveValue(true);
 }
 
@@ -90,6 +82,15 @@ fn windowStartDragHandler(ctx: *nk.IpcContext, _: std.json.Value) void {
     ctx.resolveValue(true);
 }
 
+const WindowStartResizeArgs = struct {
+    edge: u32,
+};
+
+fn windowStartResizeHandler(ctx: *nk.IpcContext, args: WindowStartResizeArgs) void {
+    ctx.webview.window.startResize(args.edge);
+    ctx.resolveValue(true);
+}
+
 fn appQuitHandler(ctx: *nk.IpcContext, payload: std.json.Value) void {
     var code: i32 = 0;
     if (payload == .object and payload.object.contains("code")) {
@@ -110,12 +111,47 @@ fn dialogMessageHandler(ctx: *nk.IpcContext, payload: std.json.Value) void {
     const text = payload.object.get("text").?.string;
     const title = if (payload.object.contains("title")) payload.object.get("title").?.string else "NauriKit";
     
-    const text_z = ctx.webview.window.app.allocator.dupeZ(u8, text) catch return;
-    defer ctx.webview.window.app.allocator.free(text_z);
+    // Default to info if not specified
+    const res = nk.Dialog.message(title, text, .info);
+    ctx.resolveValue(@tagName(res));
+}
+
+const DialogOpenFileArgs = struct {
+    title: ?[]const u8 = null,
+    filters: ?[]const nk.FileFilter = null,
+};
+
+fn dialogOpenFileHandler(ctx: *nk.IpcContext, args: DialogOpenFileArgs) void {
+    const filters = args.filters orelse &[_]nk.FileFilter{};
+    const title = args.title orelse "Open File";
     
-    const title_z = ctx.webview.window.app.allocator.dupeZ(u8, title) catch return;
-    defer ctx.webview.window.app.allocator.free(title_z);
+    if (nk.Dialog.openFile(ctx._allocator, title, filters)) |opt_path| {
+        if (opt_path) |path| {
+            ctx.resolveValue(path);
+        } else {
+            ctx.resolveValue(std.json.Value{ .null = {} }); // Cancelled
+        }
+    } else |err| {
+        ctx.rejectError("dialog error: {s}", .{@errorName(err)});
+    }
+}
+
+const DialogSaveFileArgs = struct {
+    title: ?[]const u8 = null,
+    filters: ?[]const nk.FileFilter = null,
+};
+
+fn dialogSaveFileHandler(ctx: *nk.IpcContext, args: DialogSaveFileArgs) void {
+    const filters = args.filters orelse &[_]nk.FileFilter{};
+    const title = args.title orelse "Save File";
     
-    _ = MessageBoxA(null, text_z.ptr, title_z.ptr, 0);
-    ctx.resolveValue(true);
+    if (nk.Dialog.saveFile(ctx._allocator, title, filters)) |opt_path| {
+        if (opt_path) |path| {
+            ctx.resolveValue(path);
+        } else {
+            ctx.resolveValue(std.json.Value{ .null = {} }); // Cancelled
+        }
+    } else |err| {
+        ctx.rejectError("dialog error: {s}", .{@errorName(err)});
+    }
 }

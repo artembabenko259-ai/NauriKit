@@ -141,7 +141,12 @@ const SWP_NOSIZE: u32 = 0x0001;
 const SWP_FRAMECHANGED: u32 = 0x0020;
 
 const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
+const DWMWA_SYSTEMBACKDROP_TYPE: u32 = 38;
 
+const DWMSBT_AUTO: u32 = 0;
+const DWMSBT_NONE: u32 = 1;
+const DWMSBT_MAINWINDOW: u32 = 2; // Mica
+const DWMSBT_TRANSIENTWINDOW: u32 = 3; // Acrylic
 const PM_REMOVE: u32 = 0x0001;
 
 const WM_DESTROY: u32 = 0x0002;
@@ -149,6 +154,18 @@ const WM_SIZE: u32 = 0x0005;
 const WM_CLOSE: u32 = 0x0010;
 const WM_GETMINMAXINFO: u32 = 0x0024;
 const WM_NCCREATE: u32 = 0x0081;
+const WM_NCCALCSIZE: u32 = 0x0083;
+const WM_NCHITTEST: u32 = 0x0084;
+
+const HTCLIENT: isize = 1;
+const HTLEFT: isize = 10;
+const HTRIGHT: isize = 11;
+const HTTOP: isize = 12;
+const HTTOPLEFT: isize = 13;
+const HTTOPRIGHT: isize = 14;
+const HTBOTTOM: isize = 15;
+const HTBOTTOMLEFT: isize = 16;
+const HTBOTTOMRIGHT: isize = 17;
 
 const CS_HREDRAW: u32 = 0x0002;
 const CS_VREDRAW: u32 = 0x0001;
@@ -174,6 +191,13 @@ const RECT = extern struct {
     top: i32,
     right: i32,
     bottom: i32,
+};
+
+const MARGINS = extern struct {
+    cxLeftWidth: i32,
+    cxRightWidth: i32,
+    cyTopHeight: i32,
+    cyBottomHeight: i32,
 };
 
 const WNDCLASSEXW = extern struct {
@@ -291,6 +315,11 @@ extern "dwmapi" fn DwmSetWindowAttribute(
     cbAttribute: u32,
 ) callconv(.winapi) HRESULT;
 
+extern "dwmapi" fn DwmExtendFrameIntoClientArea(
+    hwnd: HWND,
+    pMarInset: *const MARGINS,
+) callconv(.winapi) HRESULT;
+
 const GWLP_USERDATA: i32 = -21;
 const SM_CXSCREEN: i32 = 0;
 const SM_CYSCREEN: i32 = 1;
@@ -403,6 +432,20 @@ pub fn createWindow(app: *@import("../app.zig").App, config: @import("../window.
     // Store app pointer in window userdata
     _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, @bitCast(@intFromPtr(app)));
 
+    if (config.backdrop != .none or config.frameless) {
+        var margins = MARGINS{ .cxLeftWidth = -1, .cxRightWidth = -1, .cyTopHeight = -1, .cyBottomHeight = -1 };
+        _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+    }
+    
+    if (config.backdrop != .none) {
+        const backdrop_val: u32 = switch (config.backdrop) {
+            .mica => DWMSBT_MAINWINDOW,
+            .acrylic => DWMSBT_TRANSIENTWINDOW,
+            .none => DWMSBT_NONE,
+        };
+        _ = DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop_val, @sizeOf(u32));
+    }
+
     _ = UpdateWindow(hwnd);
     return hwnd;
 }
@@ -438,8 +481,15 @@ pub fn windowRestore(handle: WindowHandle) void {
 }
 
 pub fn windowStartDrag(handle: WindowHandle) void {
-    _ = ReleaseCapture();
-    _ = SendMessageA(handle, 0x00A1, 2, 0); // WM_NCLBUTTONDOWN = 0x00A1, HTCAPTION = 2
+    _ = PostMessageW(handle, WM_APP_START_DRAG, 0, 0);
+}
+
+pub fn windowStartResize(handle: WindowHandle, edge: u32) void {
+    _ = PostMessageW(handle, WM_APP_START_RESIZE, edge, 0);
+}
+
+pub fn windowClose(handle: WindowHandle) void {
+    _ = PostMessageW(handle, 0x0010, 0, 0); // WM_CLOSE
 }
 
 pub fn setWindowTitle(hwnd: WindowHandle, title: []const u8) void {
@@ -515,6 +565,18 @@ fn isSystemDarkMode() BOOL {
 
 // ─── Win32 Window Procedure ───────────────────────────────────────────────────
 
+const WM_APP: u32 = 0x8000;
+pub const WM_APP_IPC_MESSAGE: u32 = WM_APP + 1;
+const WM_APP_START_DRAG: u32 = WM_APP + 2;
+const WM_APP_START_RESIZE: u32 = WM_APP + 3;
+
+extern "user32" fn PostMessageW(hWnd: HWND, Msg: u32, wParam: WPARAM, lParam: LPARAM) callconv(.winapi) BOOL;
+
+pub fn postIpcResponse(hwnd: HWND, script: []const u8) void {
+    const script_copy = std.heap.page_allocator.dupe(u8, script) catch return;
+    _ = PostMessageW(hwnd, WM_APP_IPC_MESSAGE, script_copy.len, @bitCast(@as(isize, @intCast(@intFromPtr(script_copy.ptr)))));
+}
+
 fn windowProc(
     hwnd_opt: ?*anyopaque,
     msg: u32,
@@ -523,6 +585,36 @@ fn windowProc(
 ) callconv(.winapi) LRESULT {
     const hwnd = hwnd_opt orelse return 0; // null HWND - nothing to process
     switch (msg) {
+        WM_APP_IPC_MESSAGE => {
+            const app_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+            if (app_ptr != 0) {
+                const script_ptr = @as([*]const u8, @ptrFromInt(@as(usize, @bitCast(lParam))));
+                const script_len = @as(usize, @intCast(wParam));
+                const script = script_ptr[0..script_len];
+
+                const app: *App = @ptrFromInt(@as(usize, @bitCast(app_ptr)));
+                for (app.windows.items) |w| {
+                    if (w.handle == hwnd) {
+                        if (w.webview) |wv| {
+                            wv.eval(script) catch {};
+                        }
+                        break;
+                    }
+                }
+                std.heap.page_allocator.free(script);
+            }
+            return 0;
+        },
+        WM_APP_START_DRAG => {
+            _ = ReleaseCapture();
+            _ = SendMessageA(hwnd, 0x00A1, 2, 0); // WM_NCLBUTTONDOWN, HTCAPTION
+            return 0;
+        },
+        WM_APP_START_RESIZE => {
+            _ = ReleaseCapture();
+            _ = SendMessageA(hwnd, 0x00A1, wParam, 0); // WM_NCLBUTTONDOWN, wParam = HTLEFT/HTRIGHT/etc
+            return 0;
+        },
         WM_SIZE => {
             // Resize WebView to match window
             const app_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
@@ -559,6 +651,57 @@ fn windowProc(
                 }
             }
             return 0;
+        },
+        WM_NCCALCSIZE => {
+            if (wParam == 1) {
+                const app_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+                if (app_ptr != 0) {
+                    const app: *App = @ptrFromInt(@as(usize, @bitCast(app_ptr)));
+                    for (app.windows.items) |w| {
+                        if (w.handle == hwnd) {
+                            if (w.config.frameless) {
+                                return 0; // Remove the standard window frame
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            return DefWindowProcW(hwnd, msg, wParam, lParam);
+        },
+        WM_NCHITTEST => {
+            const hit = DefWindowProcW(hwnd, msg, wParam, lParam);
+            if (hit == HTCLIENT) {
+                const app_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+                if (app_ptr != 0) {
+                    const app: *App = @ptrFromInt(@as(usize, @bitCast(app_ptr)));
+                    for (app.windows.items) |w| {
+                        if (w.handle == hwnd and w.config.frameless and w.config.resizable) {
+                            var rect: RECT = undefined;
+                            _ = GetWindowRect(hwnd, &rect);
+
+                            const x: i32 = @as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lParam))))));
+                            const y: i32 = @as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lParam)) >> 16))));
+                            const bw: i32 = 6; // resize border width
+
+                            const left = x >= rect.left and x < rect.left + bw;
+                            const right = x < rect.right and x >= rect.right - bw;
+                            const top = y >= rect.top and y < rect.top + bw;
+                            const bottom = y < rect.bottom and y >= rect.bottom - bw;
+
+                            if (top and left) return HTTOPLEFT;
+                            if (top and right) return HTTOPRIGHT;
+                            if (bottom and left) return HTBOTTOMLEFT;
+                            if (bottom and right) return HTBOTTOMRIGHT;
+                            if (left) return HTLEFT;
+                            if (right) return HTRIGHT;
+                            if (top) return HTTOP;
+                            if (bottom) return HTBOTTOM;
+                        }
+                    }
+                }
+            }
+            return hit;
         },
         WM_CLOSE => {
             const app_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
@@ -673,6 +816,33 @@ const IWebView2Controller = extern struct {
         put_ZoomFactor: *const fn (*IWebView2Controller, f64) callconv(.winapi) HRESULT,
         _pad1: [16]*anyopaque,
         get_CoreWebView2: *const fn (*IWebView2Controller, *?*IWebView2WebView) callconv(.winapi) HRESULT,
+    };
+};
+
+pub const COREWEBVIEW2_COLOR = extern struct {
+    A: u8,
+    R: u8,
+    G: u8,
+    B: u8,
+};
+
+const IWebView2Controller2 = extern struct {
+    vtable: *const VTable,
+
+    const VTable = extern struct {
+        QueryInterface: *const fn (*IUnknown, *const GUID, **anyopaque) callconv(.winapi) HRESULT,
+        AddRef: *const fn (*IUnknown) callconv(.winapi) u32,
+        Release: *const fn (*IUnknown) callconv(.winapi) u32,
+        get_IsVisible: *const fn (*IWebView2Controller2, *BOOL) callconv(.winapi) HRESULT,
+        put_IsVisible: *const fn (*IWebView2Controller2, BOOL) callconv(.winapi) HRESULT,
+        get_Bounds: *const fn (*IWebView2Controller2, *RECT) callconv(.winapi) HRESULT,
+        put_Bounds: *const fn (*IWebView2Controller2, RECT) callconv(.winapi) HRESULT,
+        get_ZoomFactor: *const fn (*IWebView2Controller2, *f64) callconv(.winapi) HRESULT,
+        put_ZoomFactor: *const fn (*IWebView2Controller2, f64) callconv(.winapi) HRESULT,
+        _pad1: [16]*anyopaque,
+        get_CoreWebView2: *const fn (*IWebView2Controller2, *?*IWebView2WebView) callconv(.winapi) HRESULT,
+        get_DefaultBackgroundColor: *const fn (*IWebView2Controller2, *COREWEBVIEW2_COLOR) callconv(.winapi) HRESULT,
+        put_DefaultBackgroundColor: *const fn (*IWebView2Controller2, COREWEBVIEW2_COLOR) callconv(.winapi) HRESULT,
     };
 };
 
@@ -891,6 +1061,22 @@ fn makeCtrlHandler(allocator: std.mem.Allocator, state: *WebView2State) !*ICtrlC
             wv2_state.webview = wv;
 
             // Set initial bounds
+            // Set transparent background if requested
+            if (wv2_state.naurikit_wv.window.config.transparent) {
+                const IID_ICoreWebView2Controller2 = GUID{
+                    .Data1 = 0xC979903E,
+                    .Data2 = 0xD4CA,
+                    .Data3 = 0x4228,
+                    .Data4 = .{ 0x92, 0xEB, 0x47, 0xEE, 0x3F, 0xA9, 0x6E, 0xAB },
+                };
+                var controller2: ?*IWebView2Controller2 = null;
+                if (controller.?.vtable.QueryInterface(@ptrCast(controller.?), &IID_ICoreWebView2Controller2, @ptrCast(&controller2)) == 0) {
+                    const color = COREWEBVIEW2_COLOR{ .A = 0, .R = 0, .G = 0, .B = 0 };
+                    _ = controller2.?.vtable.put_DefaultBackgroundColor(controller2.?, color);
+                    _ = controller2.?.vtable.Release(@ptrCast(controller2.?));
+                }
+            }
+
             var rect: RECT = undefined;
             _ = GetClientRect(wv2_state.hwnd, &rect);
             _ = controller.?.vtable.put_Bounds(controller.?, rect);
@@ -1146,6 +1332,146 @@ fn toUtf16(buf: []u16, utf8: []const u8) ![:0]const u16 {
     const written = try std.unicode.utf8ToUtf16Le(buf[0 .. buf.len - 1], utf8);
     buf[written] = 0;
     return buf[0..written :0];
+}
+
+// ─── Native Dialogs ──────────────────────────────────────────────────────────
+
+const dialog = @import("../dialog.zig");
+
+const OPENFILENAMEW = extern struct {
+    lStructSize: u32,
+    hwndOwner: ?HWND,
+    hInstance: ?HINSTANCE,
+    lpstrFilter: ?[*:0]const u16,
+    lpstrCustomFilter: ?*u16,
+    nMaxCustFilter: u32,
+    nFilterIndex: u32,
+    lpstrFile: ?[*]u16,
+    nMaxFile: u32,
+    lpstrFileTitle: ?[*]u16,
+    nMaxFileTitle: u32,
+    lpstrInitialDir: ?[*:0]const u16,
+    lpstrTitle: ?[*:0]const u16,
+    Flags: u32,
+    nFileOffset: u16,
+    nFileExtension: u16,
+    lpstrDefExt: ?[*:0]const u16,
+    lCustData: LPARAM,
+    lpfnHook: ?*anyopaque,
+    lpTemplateName: ?[*:0]const u16,
+    pvReserved: ?*anyopaque,
+    dwReserved: u32,
+    FlagsEx: u32,
+};
+
+extern "comdlg32" fn GetOpenFileNameW(args: *OPENFILENAMEW) callconv(.winapi) BOOL;
+extern "comdlg32" fn GetSaveFileNameW(args: *OPENFILENAMEW) callconv(.winapi) BOOL;
+extern "user32" fn MessageBoxW(hWnd: ?HWND, lpText: ?[*:0]const u16, lpCaption: ?[*:0]const u16, uType: u32) callconv(.winapi) i32;
+
+fn buildFilterString(allocator: std.mem.Allocator, filters: []const dialog.FileFilter) !?[*:0]const u16 {
+    if (filters.len == 0) return null;
+    var buf = std.ArrayList(u16).empty;
+    defer buf.deinit(allocator);
+    for (filters) |f| {
+        const name_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, f.name);
+        defer allocator.free(name_w);
+        try buf.appendSlice(allocator, name_w);
+        try buf.append(allocator, 0);
+
+        const pattern_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, f.pattern);
+        defer allocator.free(pattern_w);
+        try buf.appendSlice(allocator, pattern_w);
+        try buf.append(allocator, 0);
+    }
+    try buf.append(allocator, 0); // double null termination
+    return (try buf.toOwnedSliceSentinel(allocator, 0)).ptr;
+}
+
+pub fn dialogOpenFile(allocator: std.mem.Allocator, title: []const u8, filters: []const dialog.FileFilter) !?[]u8 {
+    var file_buf: [32768]u16 = undefined;
+    file_buf[0] = 0;
+
+    const title_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, title);
+    defer allocator.free(title_w);
+    
+    const filter_w = try buildFilterString(allocator, filters);
+
+    var ofn = std.mem.zeroes(OPENFILENAMEW);
+    ofn.lStructSize = @sizeOf(OPENFILENAMEW);
+    ofn.hwndOwner = null;
+    ofn.lpstrFilter = filter_w;
+    ofn.lpstrFile = @ptrCast(&file_buf);
+    ofn.nMaxFile = file_buf.len;
+    ofn.lpstrTitle = title_w.ptr;
+    // OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER
+    ofn.Flags = 0x00000800 | 0x00001000 | 0x00080000;
+
+    if (GetOpenFileNameW(&ofn) != 0) {
+        const len = std.mem.indexOfScalar(u16, &file_buf, 0) orelse 0;
+        return try std.unicode.utf16LeToUtf8Alloc(allocator, file_buf[0..len]);
+    }
+    return null;
+}
+
+pub fn dialogSaveFile(allocator: std.mem.Allocator, title: []const u8, filters: []const dialog.FileFilter) !?[]u8 {
+    var file_buf: [32768]u16 = undefined;
+    file_buf[0] = 0;
+
+    const title_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, title);
+    defer allocator.free(title_w);
+    
+    const filter_w = try buildFilterString(allocator, filters);
+
+    var ofn = std.mem.zeroes(OPENFILENAMEW);
+    ofn.lStructSize = @sizeOf(OPENFILENAMEW);
+    ofn.hwndOwner = null;
+    ofn.lpstrFilter = filter_w;
+    ofn.lpstrFile = @ptrCast(&file_buf);
+    ofn.nMaxFile = file_buf.len;
+    ofn.lpstrTitle = title_w.ptr;
+    // OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_EXPLORER
+    ofn.Flags = 0x00000002 | 0x00000800 | 0x00080000;
+
+    if (GetSaveFileNameW(&ofn) != 0) {
+        const len = std.mem.indexOfScalar(u16, &file_buf, 0) orelse 0;
+        return try std.unicode.utf16LeToUtf8Alloc(allocator, file_buf[0..len]);
+    }
+    return null;
+}
+
+pub fn dialogOpenFolder(allocator: std.mem.Allocator, title: []const u8) !?[]u8 {
+    _ = title;
+    _ = allocator;
+    // SHBrowseForFolder implementation skipped for brevity
+    return null;
+}
+
+pub fn dialogMessage(title: []const u8, text: []const u8, kind: dialog.Dialog.MessageKind) dialog.Dialog.MessageResult {
+    const title_w = std.unicode.utf8ToUtf16LeAllocZ(std.heap.page_allocator, title) catch return .cancel;
+    defer std.heap.page_allocator.free(title_w);
+
+    const text_w = std.unicode.utf8ToUtf16LeAllocZ(std.heap.page_allocator, text) catch return .cancel;
+    defer std.heap.page_allocator.free(text_w);
+
+    var flags: u32 = 0; // MB_OK
+    switch (kind) {
+        .info => flags |= 0x00000040, // MB_ICONINFORMATION
+        .warning => flags |= 0x00000030, // MB_ICONWARNING
+        .@"error" => flags |= 0x00000010, // MB_ICONERROR
+        .question => {
+            flags |= 0x00000020; // MB_ICONQUESTION
+            flags |= 0x00000001; // MB_OKCANCEL
+        },
+    }
+
+    const res = MessageBoxW(null, text_w.ptr, title_w.ptr, flags);
+    return switch (res) {
+        1 => .ok, // IDOK
+        2 => .cancel, // IDCANCEL
+        6 => .yes, // IDYES
+        7 => .no, // IDNO
+        else => .cancel,
+    };
 }
 
 

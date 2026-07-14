@@ -5,6 +5,28 @@
 const std = @import("std");
 
 pub const Fs = struct {
+    /// Checks if a requested path is allowed by the provided scope rules.
+    pub fn checkScope(allocator: std.mem.Allocator, scope_opt: ?[]const []const u8, req_path: []const u8) !bool {
+        const scope = scope_opt orelse return true; // null means allow all
+
+        const resolved_req = try std.fs.path.resolve(allocator, &.{req_path});
+        defer allocator.free(resolved_req);
+
+        for (scope) |allowed_path| {
+            const resolved_allowed = try std.fs.path.resolve(allocator, &.{allowed_path});
+            defer allocator.free(resolved_allowed);
+
+            if (std.mem.startsWith(u8, resolved_req, resolved_allowed)) {
+                // Ensure it's not a partial match like allowed="C:\abc" req="C:\abcdef"
+                if (resolved_req.len == resolved_allowed.len or
+                    resolved_req[resolved_allowed.len] == std.fs.path.sep)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
     /// Read entire file into an allocated buffer. Caller must free.
     pub fn readFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
         const file = try std.Io.Dir.cwd().openFile(std.Options.debug_io, path, .{});

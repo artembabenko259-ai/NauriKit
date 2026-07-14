@@ -18,6 +18,9 @@ pub const AppConfig = struct {
     tray: bool = false,
     /// Whether to allow multiple instances
     single_instance: bool = false,
+    /// Allowed filesystem paths for IPC. If null, all paths are allowed (insecure).
+    /// If an empty slice `&.{}`, no paths are allowed.
+    fs_scope: ?[]const []const u8 = null,
 };
 
 pub const App = struct {
@@ -71,7 +74,9 @@ pub const App = struct {
     /// Request graceful shutdown.
     pub fn quit(self: *Self, code: i32) void {
         self.exit_code = code;
-        platform.postQuitMessage(code);
+        for (self.windows.items) |w| {
+            w.close();
+        }
     }
 
     /// Remove a window from the managed list (called on window close).

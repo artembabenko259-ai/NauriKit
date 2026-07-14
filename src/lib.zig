@@ -22,6 +22,7 @@ pub const Ipc = @import("ipc.zig").Ipc;
 pub const IpcCommand = @import("ipc.zig").IpcCommand;
 pub const IpcContext = @import("ipc.zig").IpcContext;
 pub const Dialog = @import("dialog.zig").Dialog;
+pub const FileFilter = @import("dialog.zig").FileFilter;
 pub const Fs = @import("fs.zig").Fs;
 pub const Notification = @import("notification.zig").Notification;
 
