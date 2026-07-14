@@ -12,6 +12,13 @@ pub const WindowTheme = enum { system, light, dark };
 
 pub const WindowBackdrop = enum { none, mica, acrylic };
 
+pub const Rect = struct {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+};
+
 pub const WindowOptions = struct {
     title: []const u8 = "NauriKit App",
     width: u32 = 800,
@@ -35,6 +42,7 @@ pub const Window = struct {
     config: WindowOptions,
     handle: platform.WindowHandle,
     webview: ?*WebView,
+    clickthrough_rects: std.ArrayList(Rect),
 
     const Self = @This();
 
@@ -45,6 +53,7 @@ pub const Window = struct {
             .config = config,
             .handle = handle,
             .webview = null,
+            .clickthrough_rects = std.ArrayList(Rect).empty,
         };
     }
 
@@ -53,6 +62,7 @@ pub const Window = struct {
             wv.deinit();
             self.app.allocator.destroy(wv);
         }
+        self.clickthrough_rects.deinit(self.app.allocator);
         platform.destroyWindow(self.handle);
     }
 
@@ -118,6 +128,11 @@ pub const Window = struct {
 
     pub fn startResize(self: *Self, edge: u32) void {
         platform.windowStartResize(self.handle, edge);
+    }
+
+    /// Set click-through region. Empty slice makes entire window click-through.
+    pub fn setClickthroughRegion(self: *Self, rects: []const Rect) void {
+        platform.setWindowClickthroughRegion(self.handle, rects);
     }
 
     // ─── WebView ──────────────────────────────────────────────────────────────

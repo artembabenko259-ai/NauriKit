@@ -163,6 +163,39 @@
       model.y = (window.innerHeight - model.height) / 2;
 
       app.stage.addChild(model);
+      
+      // Tell the native backend which regions are clickable
+      // This enables click-through for transparent pixels!
+      function updateClickthrough() {
+        const bounds = model.getBounds();
+        
+        // Wait until the model has fully loaded and has non-zero size
+        if (bounds.width === 0 || bounds.height === 0) {
+            setTimeout(updateClickthrough, 100);
+            return;
+        }
+
+        const btnBounds = btnClose.getBoundingClientRect();
+        
+        naurikit.invoke('window_set_clickthrough_region', {
+          rects: [
+            {
+              x: Math.floor(bounds.x),
+              y: Math.floor(bounds.y),
+              width: Math.ceil(bounds.width),
+              height: Math.ceil(bounds.height)
+            },
+            {
+              x: Math.floor(btnBounds.x),
+              y: Math.floor(btnBounds.y),
+              width: Math.ceil(btnBounds.width),
+              height: Math.ceil(btnBounds.height)
+            }
+          ]
+        });
+      }
+      
+      updateClickthrough();
 
       // Add interactivity - model looks at cursor
       dragHandle.addEventListener('mousemove', (e) => {

@@ -150,9 +150,10 @@ const DWMSBT_AUTO: u32 = 0;
 const DWMSBT_NONE: u32 = 1;
 const DWMSBT_MAINWINDOW: u32 = 2; // Mica
 const DWMSBT_TRANSIENTWINDOW: u32 = 3; // Acrylic
-const PM_REMOVE: u32 = 0x0001;
+pub const HRGN = *opaque {};
 
-const WM_DESTROY: u32 = 0x0002;
+const PM_REMOVE: u32 = 0x0001;
+pub const WM_DESTROY = 0x0002;
 const WM_SIZE: u32 = 0x0005;
 const WM_CLOSE: u32 = 0x0010;
 const WM_GETMINMAXINFO: u32 = 0x0024;
@@ -161,14 +162,15 @@ const WM_NCCALCSIZE: u32 = 0x0083;
 const WM_NCHITTEST: u32 = 0x0084;
 
 const HTCLIENT: isize = 1;
-const HTLEFT: isize = 10;
-const HTRIGHT: isize = 11;
-const HTTOP: isize = 12;
-const HTTOPLEFT: isize = 13;
-const HTTOPRIGHT: isize = 14;
-const HTBOTTOM: isize = 15;
-const HTBOTTOMLEFT: isize = 16;
-const HTBOTTOMRIGHT: isize = 17;
+const HTLEFT: LRESULT = 10;
+const HTRIGHT: LRESULT = 11;
+const HTTOP: LRESULT = 12;
+const HTTOPLEFT: LRESULT = 13;
+const HTTOPRIGHT: LRESULT = 14;
+const HTBOTTOM: LRESULT = 15;
+const HTBOTTOMLEFT: LRESULT = 16;
+const HTBOTTOMRIGHT: LRESULT = 17;
+const HTTRANSPARENT: LRESULT = -1;
 
 const CS_HREDRAW: u32 = 0x0002;
 const CS_VREDRAW: u32 = 0x0001;
@@ -273,6 +275,15 @@ pub extern "user32" fn SetLayeredWindowAttributes(hwnd: HWND, crKey: u32, bAlpha
 pub extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
 pub extern "user32" fn SendMessageA(hWnd: HWND, Msg: u32, wParam: usize, lParam: isize) callconv(.winapi) LRESULT;
 extern "user32" fn SetWindowTextW(hWnd: HWND, lpString: [*:0]const u16) callconv(.winapi) BOOL;
+pub extern "user32" fn ScreenToClient(hWnd: HWND, lpPoint: *POINT) callconv(.winapi) BOOL;
+pub extern "user32" fn SetWindowRgn(hWnd: HWND, hRgn: HRGN, bRedraw: BOOL) callconv(.winapi) i32;
+
+// GDI32
+pub extern "gdi32" fn CreateRectRgn(nLeftRect: i32, nTopRect: i32, nRightRect: i32, nBottomRect: i32) callconv(.winapi) HRGN;
+pub extern "gdi32" fn CombineRgn(hrgnDest: HRGN, hrgnSrc1: HRGN, hrgnSrc2: HRGN, iMode: i32) callconv(.winapi) i32;
+pub extern "gdi32" fn DeleteObject(hObject: HRGN) callconv(.winapi) BOOL;
+
+// Message functions
 extern "user32" fn SetWindowPos(
     hWnd: HWND,
     hWndInsertAfter: ?HWND,
@@ -507,6 +518,20 @@ pub fn setWindowTitle(hwnd: WindowHandle, title: []const u8) void {
     _ = SetWindowTextW(hwnd, w);
 }
 
+pub fn setWindowClickthroughRegion(hwnd: WindowHandle, rects: []const @import("../window.zig").Rect) void {
+    const app_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    if (app_ptr != 0) {
+        const app: *App = @ptrFromInt(@as(usize, @bitCast(app_ptr)));
+        for (app.windows.items) |w| {
+            if (w.handle == hwnd) {
+                w.clickthrough_rects.clearRetainingCapacity();
+                w.clickthrough_rects.appendSlice(app.allocator, rects) catch {};
+                break;
+            }
+        }
+    }
+}
+
 pub fn setWindowSize(hwnd: WindowHandle, width: u32, height: u32) void {
     _ = SetWindowPos(hwnd, null, 0, 0, @intCast(width), @intCast(height), SWP_NOMOVE);
 }
@@ -683,32 +708,53 @@ fn windowProc(
         },
         WM_NCHITTEST => {
             const hit = DefWindowProcW(hwnd, msg, wParam, lParam);
+            
+            const x: i32 = @as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lParam))))));
+            const y: i32 = @as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lParam)) >> 16))));
+            
             if (hit == HTCLIENT) {
                 const app_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
                 if (app_ptr != 0) {
                     const app: *App = @ptrFromInt(@as(usize, @bitCast(app_ptr)));
                     for (app.windows.items) |w| {
-                        if (w.handle == hwnd and w.config.frameless and w.config.resizable) {
-                            var rect: RECT = undefined;
-                            _ = GetWindowRect(hwnd, &rect);
+                        if (w.handle == hwnd) {
+                            // Check clickthrough rects first
+                            if (w.clickthrough_rects.items.len > 0) {
+                                var pt = POINT{ .x = x, .y = y };
+                                _ = ScreenToClient(hwnd, &pt);
+                                
+                                var inside = false;
+                                for (w.clickthrough_rects.items) |r| {
+                                    if (pt.x >= r.x and pt.y >= r.y and pt.x < r.x + @as(i32, @intCast(r.width)) and pt.y < r.y + @as(i32, @intCast(r.height))) {
+                                        inside = true;
+                                        break;
+                                    }
+                                }
+                                
+                                if (!inside) return HTTRANSPARENT;
+                            }
+                        
+                            if (w.config.frameless and w.config.resizable) {
+                                var rect: RECT = undefined;
+                                _ = GetWindowRect(hwnd, &rect);
 
-                            const x: i32 = @as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lParam))))));
-                            const y: i32 = @as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lParam)) >> 16))));
-                            const bw: i32 = 6; // resize border width
+                                const bw: i32 = 6; // resize border width
 
-                            const left = x >= rect.left and x < rect.left + bw;
-                            const right = x < rect.right and x >= rect.right - bw;
-                            const top = y >= rect.top and y < rect.top + bw;
-                            const bottom = y < rect.bottom and y >= rect.bottom - bw;
+                                const left = x >= rect.left and x < rect.left + bw;
+                                const right = x < rect.right and x >= rect.right - bw;
+                                const top = y >= rect.top and y < rect.top + bw;
+                                const bottom = y < rect.bottom and y >= rect.bottom - bw;
 
-                            if (top and left) return HTTOPLEFT;
-                            if (top and right) return HTTOPRIGHT;
-                            if (bottom and left) return HTBOTTOMLEFT;
-                            if (bottom and right) return HTBOTTOMRIGHT;
-                            if (left) return HTLEFT;
-                            if (right) return HTRIGHT;
-                            if (top) return HTTOP;
-                            if (bottom) return HTBOTTOM;
+                                if (top and left) return HTTOPLEFT;
+                                if (top and right) return HTTOPRIGHT;
+                                if (bottom and left) return HTBOTTOMLEFT;
+                                if (bottom and right) return HTBOTTOMRIGHT;
+                                if (left) return HTLEFT;
+                                if (right) return HTRIGHT;
+                                if (top) return HTTOP;
+                                if (bottom) return HTBOTTOM;
+                            }
+                            break;
                         }
                     }
                 }

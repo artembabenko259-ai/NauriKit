@@ -16,6 +16,8 @@ pub fn main() !void {
         .height = 500,
         .frameless = true,    // No chrome
         .transparent = true,  // Transparent background!
+        .resizable = false,
+        .always_on_top = true, // Keep widget on top!
     });
     const html_url = "file:///C:/Users/User/Desktop/Nauri/naurikit/examples/live2d/src/index.html";
 

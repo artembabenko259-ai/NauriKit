@@ -18,6 +18,7 @@ pub fn registerCoreHandlers(wv: *nk.WebView) !void {
     try wv.onCommand("dialog_open_file", nk.IpcCommand.makeTyped(DialogOpenFileArgs, dialogOpenFileHandler), null);
     try wv.onCommand("dialog_save_file", nk.IpcCommand.makeTyped(DialogSaveFileArgs, dialogSaveFileHandler), null);
     try wv.onCommand("app_quit", nk.IpcCommand.make(appQuitHandler), null);
+    try wv.onCommand("window_set_clickthrough_region", nk.IpcCommand.makeTyped(WindowSetClickthroughRegionArgs, windowSetClickthroughRegionHandler), null);
 }
 
 const FsReadArgs = struct {
@@ -100,6 +101,15 @@ fn appQuitHandler(ctx: *nk.IpcContext, payload: std.json.Value) void {
         }
     }
     ctx.webview.window.app.quit(code);
+    ctx.resolveValue(true);
+}
+
+const WindowSetClickthroughRegionArgs = struct {
+    rects: []@import("window.zig").Rect,
+};
+
+fn windowSetClickthroughRegionHandler(ctx: *nk.IpcContext, args: WindowSetClickthroughRegionArgs) void {
+    ctx.webview.window.setClickthroughRegion(args.rects);
     ctx.resolveValue(true);
 }
 
