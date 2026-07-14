@@ -1,0 +1,12 @@
+.{
+    .name = .naurikit,
+    .fingerprint = 0xb484fcef2fff86a4,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.13.0",
+    .paths = .{
+        "src",
+        "js",
+        "build.zig",
+        "build.zig.zon",
+    },
+}

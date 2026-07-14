@@ -1,0 +1,7 @@
+.zig-cache/
+zig-out/
+node_modules/
+dist/
+dist-nauri/
+.env
+.DS_Store
